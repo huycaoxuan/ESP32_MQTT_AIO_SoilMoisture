@@ -11,13 +11,14 @@
 #include "Adafruit_MQTT_Client.h"
 #include "secrets.h"
 
-#define TRIGGER_PIN 4 //Nut bam setup wifi
-//#define DHT1_PIN 14
-#define Relay1 12 // the on off button feed turns this Relay1 on/off
-#define S_LED 2 // LED bao trang thai
+// set pin numbers
+const int TRIGGER_PIN = 4;  //Nut bam setup wifi
+const int S_LED =  16;    // // LED bao trang thai
+const int SoilPin = 34; // SoilMoisture sensor is connected to GPIO 34 (Analog ADC1_CH6) 
+const int Relay1 = 17; // the on off button feed turns this Relay1 on/off
 
-#define MQTT_UPDATE_INTERVAL 60000 //Thoi gian moi lan update len cloud
-float soil_moisture1 = 0.00 ; //soil moisture
+#define MQTT_UPDATE_INTERVAL 600000 //Thoi gian moi lan update len cloud mili giay
+int soil_moisture1 = 0 ; //soil moisture
 bool wifiok = false;     //Wifi status
 //bool MQTT_status = false; //MQTT status
 bool auto_mode = false;
@@ -49,19 +50,19 @@ Adafruit_MQTT_Client mqtt(&wifiClient, AIO_SERVER, AIO_SERVERPORT, AIO_USERNAME,
 /****************************** Feeds ***************************************/
 
 // Setup a feed for publishing.
-Adafruit_MQTT_Publish temp = Adafruit_MQTT_Publish(&mqtt, AIO_USERNAME "/feeds/temp"); //check
+Adafruit_MQTT_Publish soil = Adafruit_MQTT_Publish(&mqtt, AIO_USERNAME "/feeds/soil"); //check
 /*
 Adafruit_MQTT_Publish hum = Adafruit_MQTT_Publish(&mqtt, AIO_USERNAME "/feeds/humidity");
-Adafruit_MQTT_Publish temp2 = Adafruit_MQTT_Publish(&mqtt, AIO_USERNAME "/feeds/temp2");
+Adafruit_MQTT_Publish soil2 = Adafruit_MQTT_Publish(&mqtt, AIO_USERNAME "/feeds/soil2");
 Adafruit_MQTT_Publish hum2 = Adafruit_MQTT_Publish(&mqtt, AIO_USERNAME "/feeds/humidity2");
-Adafruit_MQTT_Publish temp3 = Adafruit_MQTT_Publish(&mqtt, AIO_USERNAME "/feeds/temp3");
+Adafruit_MQTT_Publish soil3 = Adafruit_MQTT_Publish(&mqtt, AIO_USERNAME "/feeds/soil3");
 Adafruit_MQTT_Publish hum3 = Adafruit_MQTT_Publish(&mqtt, AIO_USERNAME "/feeds/humidity3");
 */
-Adafruit_MQTT_Publish hum_status = Adafruit_MQTT_Publish(&mqtt, AIO_USERNAME "/feeds/humidifier-status"); //check
-
+Adafruit_MQTT_Publish relay_status = Adafruit_MQTT_Publish(&mqtt, AIO_USERNAME "/feeds/relay-status");
 //Sub
 Adafruit_MQTT_Subscribe onoffbutton = Adafruit_MQTT_Subscribe(&mqtt, AIO_USERNAME "/feeds/switch1");
-Adafruit_MQTT_Subscribe slider = Adafruit_MQTT_Subscribe(&mqtt, AIO_USERNAME "/feeds/slider1"); // for setting the threshold of automatic turn on humidifier
+Adafruit_MQTT_Subscribe slider = Adafruit_MQTT_Subscribe(&mqtt, AIO_USERNAME "/feeds/slider1"); // for setting the threshold of automatic turn on valve
+//Can them mot subcribe de upload status
 
 void MQTT_connect();
 
@@ -123,7 +124,7 @@ void setup() {
 
 void checkButton(){
   // check for button press
-  if ( digitalRead(TRIGGER_PIN) == LOW ) {
+  if ( digitalRead(TRIGGER_PIN) == LOW ) {     //Check lai nut bam sau
     // poor mans debounce/press-hold, code not ideal for production
     delay(50);
     if( digitalRead(TRIGGER_PIN) == LOW ){
@@ -193,11 +194,11 @@ void loop() {
       
       if (strcmp((char *)onoffbutton.lastread, "ON") == 0) {
         digitalWrite(Relay1, HIGH); 
-        hum_status.publish(1);
+        relay_status.publish(1);
       }
       if (strcmp((char *)onoffbutton.lastread, "OFF") == 0) {
         digitalWrite(Relay1, LOW);
-        hum_status.publish(0); 
+        relay_status.publish(0); 
       }
     }
     
@@ -217,30 +218,18 @@ void loop() {
          Serial.print("Soil moisture threshold is:");
          Serial.println(sliderval);
         }
-      //analogWrite(PWMOUT, sliderval);
       }
      }
   
    if (millis() - lastPub > MQTT_UPDATE_INTERVAL) {
    /************chuong trinh chinh cho vao day***************/
-  temperature1 = getTemp("c", 1); // get DHT1 temperature in C 
-  humidity1 = getTemp("h", 1); // get DHT1 humidity
 
-  //Publish Sensor 1
-  Serial.print(F("\nSending Temperature 1 "));//check
-  Serial.print(temperature1);
-  Serial.print("...");
-  if (! temp.publish(temperature1)) {
-    Serial.println(F("Temp1 failed to publish!"));
-  } else {
-    Serial.println(F("Temp1 published!"));
-  }
-
-    lastPub = millis();
+  PubSoil01();
+  lastPub = millis();
   }
 
   //Dieu khien Relay
-  if (auto_mode && humidity1>0) {
+  if (auto_mode && soil_moisture1>0) {
     ControlRelay();
   }
   // ping the server to keep the mqtt connection alive
@@ -268,38 +257,54 @@ void MQTT_connect() {
   if (mqtt.connected()) {
     return;
   }
-
   Serial.print("Connecting to MQTT... ");
-  uint8_t retries = 3;
+  uint8_t retries = 5; // Thu lai 5 lan neu khong ket noi thanh cong
   while ((ret = mqtt.connect()) != 0) { // connect will return 0 for connected
        Serial.println(mqtt.connectErrorString(ret));
-       Serial.println("Retrying MQTT connection in 5 seconds...");
+       Serial.println("Retrying MQTT connection in 60 seconds...");
        mqtt.disconnect();
-       delay(5000);  // wait 5 seconds
+       delay(60000);  // wait 10 seconds
        retries--;
        if (retries == 0) {
-         // basically die and wait for WDT to reset me
-         while (1);
+        Serial.println("MQTT connection loss.");
+        Serial.println("Restart ESP!");
+        delay(2000);
+        ESP.restart(); // Sau 5 lan khong ket noi thanh cong thi restart
+         //while (1); //Dung cau lenh nay khi khong muon restart
        }
   }
   Serial.println("MQTT Connected!");
+  PubSoil01();
   //MQTT_status = true;
 }
 
 //Dieu khien Relay
 void ControlRelay() {
-    if(humidity1<sliderval){
+    if(soil_moisture1>sliderval){
         Serial.println("It's not enought soil moisture!");
         digitalWrite(Relay1, HIGH); 
         Serial.println("Turn on Relay!");
-        hum_status.publish(1);
+        relay_status.publish(1);
         delay(500);
     }
     else{
         Serial.println("Soil moisture ok!");
         digitalWrite(Relay1, LOW); 
         Serial.println("Turn off Relay!");
-        hum_status.publish(0);
+        relay_status.publish(0);
         delay(500);
     }
   }
+
+ void PubSoil01(){
+    soil_moisture1 = analogRead(SoilPin);
+  //Publish Sensor 1
+  Serial.print(F("\nSending Soil Moisture 1 "));//check
+  Serial.print(soil_moisture1);
+  Serial.print("...");
+  if (! soil.publish(soil_moisture1)) {
+    Serial.println(F("Soil1 failed to publish!"));
+  } else {
+    Serial.println(F("Soil1 published!"));
+  }
+ }
