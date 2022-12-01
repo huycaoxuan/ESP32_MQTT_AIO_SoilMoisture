@@ -1,4 +1,4 @@
-/**
+ /**
  * Ghi du lieu tu cam bien do am dat, su dung ESP32 - mod by HuyCX
  * lib: Wifimanager, AIO, DHT
  * Implements TRIGGEN_PIN button press, press for ondemand configportal, hold for 3 seconds for reset settings.
@@ -15,7 +15,8 @@
 const int TRIGGER_PIN = 4;  //Nut bam setup wifi
 const int S_LED =  16;    // // LED bao trang thai
 const int SoilPin = 34; // SoilMoisture sensor is connected to GPIO 34 (Analog ADC1_CH6) 
-const int Relay1 = 17; // the on off button feed turns this Relay1 on/off
+const int Relay1 = 17; // for valve
+const int Relay2 = 18; // for light
 
 #define MQTT_UPDATE_INTERVAL 600000 //Thoi gian moi lan update len cloud mili giay
 int soil_moisture1 = 0 ; //soil moisture
@@ -51,18 +52,14 @@ Adafruit_MQTT_Client mqtt(&wifiClient, AIO_SERVER, AIO_SERVERPORT, AIO_USERNAME,
 
 // Setup a feed for publishing.
 Adafruit_MQTT_Publish soil = Adafruit_MQTT_Publish(&mqtt, AIO_USERNAME "/feeds/soil"); //check
-/*
-Adafruit_MQTT_Publish hum = Adafruit_MQTT_Publish(&mqtt, AIO_USERNAME "/feeds/humidity");
-Adafruit_MQTT_Publish soil2 = Adafruit_MQTT_Publish(&mqtt, AIO_USERNAME "/feeds/soil2");
-Adafruit_MQTT_Publish hum2 = Adafruit_MQTT_Publish(&mqtt, AIO_USERNAME "/feeds/humidity2");
-Adafruit_MQTT_Publish soil3 = Adafruit_MQTT_Publish(&mqtt, AIO_USERNAME "/feeds/soil3");
-Adafruit_MQTT_Publish hum3 = Adafruit_MQTT_Publish(&mqtt, AIO_USERNAME "/feeds/humidity3");
-*/
-Adafruit_MQTT_Publish relay_status = Adafruit_MQTT_Publish(&mqtt, AIO_USERNAME "/feeds/relay-status");
+Adafruit_MQTT_Publish relay_status1 = Adafruit_MQTT_Publish(&mqtt, AIO_USERNAME "/feeds/relay-status");
+Adafruit_MQTT_Publish relay_status2 = Adafruit_MQTT_Publish(&mqtt, AIO_USERNAME "/feeds/relay-status2");
+//Adafruit_MQTT_Publish infor = Adafruit_MQTT_Publish(&mqtt, AIO_USERNAME "agrihn2/feeds/cmdinf");
+
 //Sub
-Adafruit_MQTT_Subscribe onoffbutton = Adafruit_MQTT_Subscribe(&mqtt, AIO_USERNAME "/feeds/switch1");
+Adafruit_MQTT_Subscribe onoffbutton1 = Adafruit_MQTT_Subscribe(&mqtt, AIO_USERNAME "/feeds/switch1");
+Adafruit_MQTT_Subscribe onoffbutton2 = Adafruit_MQTT_Subscribe(&mqtt, AIO_USERNAME "/feeds/switch2");
 Adafruit_MQTT_Subscribe slider = Adafruit_MQTT_Subscribe(&mqtt, AIO_USERNAME "/feeds/slider1"); // for setting the threshold of automatic turn on valve
-//Can them mot subcribe de upload status
 
 void MQTT_connect();
 
@@ -74,8 +71,10 @@ void setup() {
   Serial.println("\n Starting");
   pinMode(TRIGGER_PIN, INPUT);
   pinMode(Relay1, OUTPUT);     // Initialize the Relay1 pin as an output
+  pinMode(Relay2, OUTPUT);     // Initialize the Relay2 pin as an output
   pinMode(S_LED, OUTPUT);
   digitalWrite(Relay1, LOW);
+  digitalWrite(Relay2, LOW);
   // wm.resetSettings(); // wipe settings
 
   if(wm_nonblocking) wm.setConfigPortalBlocking(false);
@@ -118,7 +117,8 @@ void setup() {
   }
   
   // Setup MQTT subscription for onoff & slider feed.
-  mqtt.subscribe(&onoffbutton);
+  mqtt.subscribe(&onoffbutton1);
+  mqtt.subscribe(&onoffbutton2);
   mqtt.subscribe(&slider);
 }
 
@@ -188,17 +188,30 @@ void loop() {
   Adafruit_MQTT_Subscribe *subscription;
   while ((subscription = mqtt.readSubscription(5000))) {
     // Check if its the onoff button feed
-    if (subscription == &onoffbutton) {
-      Serial.print(F("On-Off button: "));
-      Serial.println((char *)onoffbutton.lastread);
+    if (subscription == &onoffbutton1) {
+      Serial.print(F("Valve: "));
+      Serial.println((char *)onoffbutton1.lastread);
       
-      if (strcmp((char *)onoffbutton.lastread, "ON") == 0) {
+      if (strcmp((char *)onoffbutton1.lastread, "ON") == 0) {
         digitalWrite(Relay1, HIGH); 
-        relay_status.publish(1);
+        relay_status1.publish(1);
       }
-      if (strcmp((char *)onoffbutton.lastread, "OFF") == 0) {
+      if (strcmp((char *)onoffbutton1.lastread, "OFF") == 0) {
         digitalWrite(Relay1, LOW);
-        relay_status.publish(0); 
+        relay_status1.publish(0); 
+      }
+    }
+        if (subscription == &onoffbutton2) {
+      Serial.print(F("Light: "));
+      Serial.println((char *)onoffbutton2.lastread);
+      
+      if (strcmp((char *)onoffbutton2.lastread, "ON") == 0) {
+        digitalWrite(Relay2, HIGH); 
+        relay_status2.publish(1);
+      }
+      if (strcmp((char *)onoffbutton2.lastread, "OFF") == 0) {
+        digitalWrite(Relay2, LOW);
+        relay_status2.publish(0); 
       }
     }
     
@@ -211,10 +224,12 @@ void loop() {
       if (sliderval == 0){
          auto_mode = false;
          Serial.println("Manual mode!");
+         //infor.publish("Manual");
       } 
       else {
          auto_mode = true;
          Serial.println("Automatic mode !");
+         //infor.publish(1);
          Serial.print("Soil moisture threshold is:");
          Serial.println(sliderval);
         }
@@ -274,6 +289,7 @@ void MQTT_connect() {
        }
   }
   Serial.println("MQTT Connected!");
+  //infor.publish(2);
   PubSoil01();
   //MQTT_status = true;
 }
@@ -284,14 +300,14 @@ void ControlRelay() {
         Serial.println("It's not enought soil moisture!");
         digitalWrite(Relay1, HIGH); 
         Serial.println("Turn on Relay!");
-        relay_status.publish(1);
+        relay_status1.publish(1);
         delay(500);
     }
     else{
         Serial.println("Soil moisture ok!");
         digitalWrite(Relay1, LOW); 
         Serial.println("Turn off Relay!");
-        relay_status.publish(0);
+        relay_status1.publish(0);
         delay(500);
     }
   }
